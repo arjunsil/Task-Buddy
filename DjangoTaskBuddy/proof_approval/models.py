@@ -1,6 +1,11 @@
 from django.db import models
 from django.contrib.auth.models import User
 from django.utils import timezone
+import os
+
+def user_directory_path(instance, filename):
+    # File will be uploaded to MEDIA_ROOT/user_<id>/proofs/<filename>
+    return f'user_{instance.task.user.id}/proofs/{filename}'
 
 class Task(models.Model):
     class Category(models.TextChoices):
@@ -41,8 +46,11 @@ class Task(models.Model):
     # Number of validated proofs
     valid_proof_num  = models.IntegerField(default=0)
 
+    # number of invalid proofs uploaded, mainly for troubleshooting/testing
+    invalid_proof_num = models.IntegerField(default=0)
+
     # Proof picture for task completion, optional field
-    proof_picture = models.ImageField(upload_to='proofs/', null=True, blank=True)  # Stores an image file (optional)
+    proof_images = models.JSONField(default=dict, blank=True)  # Dictionary to map image paths to their validation status
     
     # Approval status of the task, default is False
     approval_status = models.BooleanField(default=False)  # Boolean field, defaults to False
@@ -54,4 +62,13 @@ class Task(models.Model):
     def save(self, *args, **kwargs):
         # save day_of_week only once so it stays consistent with date field
         self.day_of_week = self.date.strftime('%A')
+
+        # check if approval status should get updated with each update to self
+        
+
         super().save(*args, **kwargs)
+    
+    # stringify
+    def __str__(self):
+        return f"{self.task_description} - {self.category} - {self.date} - {self.day_of_week}"
+    
