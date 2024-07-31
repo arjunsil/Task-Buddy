@@ -18,10 +18,10 @@ class Task(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     
     # Date of the task with default value set to now
-    date = models.DateField(default=timezone.now)  # Stores date (year, month, day)
+    date = models.DateField(default=timezone.now().date())  # Stores date (year, month, day)
     
     # Time of the task with default value set to now
-    time = models.TimeField(default=timezone.now)  # Stores time (hour, minute, second)
+    time = models.TimeField(default=timezone.now().time())  # Stores time (hour, minute, second)
     
     # Day of the week for the task
     day_of_week = models.CharField(max_length=9, blank=True)
@@ -50,7 +50,7 @@ class Task(models.Model):
     invalid_proof_num = models.IntegerField(default=0)
 
     # Proof picture for task completion, optional field
-    proof_images = models.JSONField(default=dict, blank=True)  # Dictionary to map image paths to their validation status
+    proof_dict = models.JSONField(default=dict, blank=True)  # Dictionary to map image paths to their validation status
     
     # Approval status of the task, default is False
     approval_status = models.BooleanField(default=False)  # Boolean field, defaults to False
@@ -64,11 +64,10 @@ class Task(models.Model):
         self.day_of_week = self.date.strftime('%A')
 
         # check if approval status should get updated with each update to self
-        
-
         super().save(*args, **kwargs)
     
     # stringify
     def __str__(self):
         return f"{self.task_description} - {self.category} - {self.date} - {self.day_of_week}"
     
+

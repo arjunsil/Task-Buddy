@@ -7,11 +7,13 @@ class TaskSerializer(serializers.ModelSerializer):
     day_of_week = serializers.ReadOnlyField()  # This field is derived from the date field
     approval_status = serializers.ReadOnlyField()  # This field is updated only after task completion
     embedding = serializers.ReadOnlyField()  # This field is set when the task is created
+    
 
     class Meta:
         model = Task  # Specify the model to be serialized
         fields = [
             'id', 'user', 'date', 'time', 'day_of_week', 'category',
-            'task_description', 'time_taken', 'proof_picture', 'approval_status'
+            'task_description', 'time_taken', 'proof_dict', 'approval_status', 
+            'expected_proof_num', 'valid_proof_num', 'invalid_proof_num', 'embedding'
         ]  # List all fields except 'embedding'
-        read_only_fields = ('day_of_week', 'approval_status',)  # Make these fields read-only
+        read_only_fields = ('day_of_week', 'approval_status','valid_proof_num', 'invalid_proof_num')  # Make these fields read-only

@@ -1,11 +1,32 @@
+import base64
 from rest_framework.response import Response
 from rest_framework.decorators import api_view, parser_classes
 from rest_framework.parsers import MultiPartParser, FormParser
 from .models import Task
 from .serializers import TaskSerializer
-import openai  # Import OpenAI for embedding generation
+from openai import OpenAI
 from django.conf import settings
+from datetime import timedelta  # Import timedelta
+import boto3
 import os
+from PIL import Image
+
+
+# Set the OpenAI API key once
+client = OpenAI()
+
+#Set up AWS S3 bucket
+s3_client = boto3.client(
+    's3',
+    aws_access_key_id = settings.AWS_ACCESS_KEY_ID,
+    aws_secret_access_key = settings.AWS_SECRET_ACCESS_KEY,
+    region_name = settings.AWS_S3_REGION_NAME
+)
+
+rek_client = boto3.client(
+    'rekognition',
+    region_name = settings.AWS_S3_REGION_NAME
+)
 
 @api_view(['POST'])
 def create_task(request):
@@ -25,15 +46,11 @@ def generate_embedding(task):
     # Combine task fields to create a text representation
     task_text = f"{task.user.id} {task.task_description} {task.category} {task.date} {task.time} {task.day_of_week} {task.time_taken} {task.approval_status}"
 
-    openai.api_key = settings.OPENAI_API_KEY
+    response = client.embeddings.create(input=task_text,
+    model="text-embedding-3-small")
 
-    response = openai.Embedding.create(
-        input=task_text,
-        model="text-embedding-ada-002"
-    )
-    
-    embedding = response['data'][0]['embedding']
-    
+    embedding = response.data[0].embedding
+
     return embedding
 
 @api_view(['POST'])
@@ -43,29 +60,65 @@ def upload_proof_picture(request, pk):
         task = Task.objects.get(pk=pk)
     except Task.DoesNotExist:
         return Response(status=404)
-    
+
     if 'time_taken' in request.data:
-        task.time_taken = request.data['time_taken']
+        # Convert time_taken to a timedelta object
+        time_taken_str = request.data['time_taken']
+        hours, minutes, seconds = map(int, time_taken_str.split(':'))
+        task.time_taken = timedelta(hours=hours, minutes=minutes, seconds=seconds)
 
     proof_image = request.FILES.get('proof_image_upload')
 
     if proof_image:
-        # Save proof image to the user's directory
-        filename = os.path.join('media', task.user_directory_path(task, proof_image.name))
-        with open(filename, 'wb+') as destination:
-           for chunk in task.proof_image.chunks():
-                destination.write(chunk)
+
+        path = f'tasks/{task.id}/{proof_image.name}'
+
+        s3_client.upload_fileobj(
+            proof_image,
+            settings.AWS_STORAGE_BUCKET_NAME,
+            path,
+            ExtraArgs={'ContentType': proof_image.content_type}
+        )
+
+
+        response = rek_client.detect_text(
+            Image = {
+                'S3Object' : {
+                    'Bucket' : settings.AWS_STORAGE_BUCKET_NAME,
+                    'Name' : path
+                }
+            }
+        )
+
+        detected_text = []
+        for text_detail in response['TextDetections']:
+            if text_detail['Confidence'] >= 92:
+                detected_text.append(text_detail['DetectedText'])
+
+        response = rek_client.detect_labels(
+            Image = {
+                'S3Object' : {
+                    'Bucket' : settings.AWS_STORAGE_BUCKET_NAME,
+                    'Name' : path
+                }
+            }
+        )
+        detected_labels = []
+        for label in response['Labels']:
+            if label['Confidence'] >= 92:
+                detected_labels.append(label['Name'])
 
         # Validate proof image
-        is_valid = validate_proof(task, filename)
-        task.proof_images[filename] = is_valid
-        
+        is_valid = validate_proof(task, detected_text, detected_labels)
+
         if is_valid:
             task.valid_proof_num += 1
+
             # ADD VALID MESSAGE
         else:
             task.invalid_proof_num += 1
 
+        task.proof_dict[proof_image.name] = is_valid
         task.approval_status = (task.valid_proof_num) == (task.expected_proof_num)
 
         # Update the embedding
@@ -76,20 +129,24 @@ def upload_proof_picture(request, pk):
         return Response(TaskSerializer(task).data)
     else:
         return Response({"error": "No proof image uploaded"}, status=400)
-    
-def validate_proof(task, proof_image_path):
-    openai.api_key = settings.OPENAI_API_KEY
 
-    # Create a prompt for the OpenAI model using the task description
-    prompt = f"Task: {task.task_description}\nProof: {proof_image_path}\nDoes this proof partially or completely satisfy the task?"
+def validate_proof(task, proof_text, proof_label):
+    prompt = f"Task: Show confirmation of {task.task_description}\nText in Image: {proof_text}\nLabels found in Image: {proof_label}\nDoes this proof partially or completely satisfy the task? Answer only yes or no"
 
-    response = openai.Completion.create(
-        model="text-davinci-003",
-        prompt=prompt,
-        max_tokens=50
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": "You are a task validator."},
+            {"role": "user", "content": prompt}
+        ]
     )
 
-    validation_result = response.choices[0].text.strip().lower()
+    validation_result = response.choices[0].message.content.strip().lower()  
+
+    # Log the full response for debugging
+    print("LLM Response:", response)
+
+
     if validation_result == 'yes':
         return True
     else:
